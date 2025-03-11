@@ -1,0 +1,13 @@
+[build]
+  publish = "."
+
+[functions]
+  directory = "functions"
+
+[[edge_functions]]
+  path = "/sse"
+  function = "sse"
+
+[[edge_functions]]
+  path = "/message"
+  function = "sse"
