@@ -2,6 +2,10 @@
 
 このリポジトリは、Server-Sent Events (SSE) を使用したModel Context Protocol (MCP) サーバーのサンプル実装です。Netlify Edge Functionsを使用してデプロイできるように設計されています。
 
+## 最新の更新
+
+- **2025/3/11**: Netlify Edge Functionsでの502エラーを修正しました。SSE接続を維持するために定期的なpingメッセージを送信する機能を追加しました。
+
 ## 機能
 
 - SSEを使用したリアルタイム通信

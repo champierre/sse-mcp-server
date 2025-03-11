@@ -80,6 +80,35 @@ export default async (req: Request, context: Context) => {
           
           // メッセージキューをクリア
           clearMessages(connectionId);
+          
+          // 定期的なpingメッセージを送信するための変数
+          let pingCount = 0;
+          
+          // 定期的なpingメッセージを送信する関数
+          const sendPing = () => {
+            const pingMessage = JSON.stringify({
+              type: "ping",
+              count: pingCount++,
+              timestamp: new Date().toISOString()
+            });
+            
+            try {
+              controller.enqueue(`data: ${pingMessage}\n\n`);
+              
+              // 次のpingを予約（10秒ごと）
+              setTimeout(sendPing, 10000);
+            } catch (error) {
+              // ストリームが閉じられている場合などのエラーを処理
+              console.error("Error sending ping:", error);
+            }
+          };
+          
+          // 最初のpingを送信（1秒後）
+          setTimeout(sendPing, 1000);
+        },
+        cancel() {
+          // ストリームがキャンセルされた場合の処理
+          console.log(`Connection ${connectionId} closed`);
         }
       });
 
