@@ -5,9 +5,20 @@
   directory = "functions"
 
 [[edge_functions]]
+  path = "/"
+  function = "sse"
+
+[[edge_functions]]
   path = "/sse"
   function = "sse"
 
 [[edge_functions]]
   path = "/message"
   function = "sse"
+
+[[headers]]
+  for = "/*"
+    [headers.values]
+    Access-Control-Allow-Origin = "*"
+    Access-Control-Allow-Methods = "GET, POST, OPTIONS"
+    Access-Control-Allow-Headers = "Content-Type, X-Connection-ID"

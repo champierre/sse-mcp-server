@@ -1,107 +1,141 @@
 import { Context } from "@netlify/edge-functions";
 
-// SSEコネクションを保持するためのマップ
-const connections = new Map<string, {
-  controller: ReadableStreamDefaultController;
-}>();
+// グローバル変数はEdge Functions間で共有されないため、
+// 各リクエストで独立して動作するように設計する必要があります
+// 代わりにDurable Objectsなどを使用することも検討できます
 
-// メッセージハンドラー
-type MessageHandler = (message: string) => void;
-const messageHandlers = new Map<string, MessageHandler>();
+// 簡易的なメッセージキューの実装
+const MESSAGES: Record<string, string[]> = {};
 
-// メッセージを登録する関数
-function registerMessageHandler(connectionId: string, handler: MessageHandler) {
-  messageHandlers.set(connectionId, handler);
+// メッセージを追加する関数
+function addMessage(connectionId: string, message: string) {
+  if (!MESSAGES[connectionId]) {
+    MESSAGES[connectionId] = [];
+  }
+  MESSAGES[connectionId].push(message);
+  
+  // キューのサイズを制限（最新の100メッセージのみ保持）
+  if (MESSAGES[connectionId].length > 100) {
+    MESSAGES[connectionId] = MESSAGES[connectionId].slice(-100);
+  }
 }
 
-// メッセージを送信する関数
-function sendMessage(connectionId: string, message: string) {
-  const handler = messageHandlers.get(connectionId);
-  if (handler) {
-    handler(message);
-  }
+// メッセージを取得する関数
+function getMessages(connectionId: string): string[] {
+  return MESSAGES[connectionId] || [];
+}
+
+// メッセージを削除する関数
+function clearMessages(connectionId: string) {
+  MESSAGES[connectionId] = [];
 }
 
 export default async (req: Request, context: Context) => {
-  const url = new URL(req.url);
-  const path = url.pathname;
+  try {
+    const url = new URL(req.url);
+    const path = url.pathname;
 
-  // SSE接続のエンドポイント
-  if (path === "/sse" && req.method === "GET") {
-    // ユニークなコネクションIDを生成
-    const connectionId = crypto.randomUUID();
-    
-    // ReadableStreamを作成
-    const stream = new ReadableStream({
-      start(controller) {
-        // 初期メッセージを送信
-        controller.enqueue(`data: Connected with ID ${connectionId}\n\n`);
-        
-        // コネクションを保存
-        connections.set(connectionId, { controller });
-        
-        // メッセージハンドラーを登録
-        registerMessageHandler(connectionId, (message) => {
-          controller.enqueue(`data: ${message}\n\n`);
-        });
-        
-        // 定期的にメッセージを送信（テスト用）
-        const interval = setInterval(() => {
-          if (connections.has(connectionId)) {
-            sendMessage(connectionId, JSON.stringify({
-              type: "ping",
-              timestamp: new Date().toISOString()
-            }));
-          } else {
-            clearInterval(interval);
-          }
-        }, 10000);
-      },
-      cancel() {
-        // コネクションが閉じられたときの処理
-        connections.delete(connectionId);
-        messageHandlers.delete(connectionId);
-      }
-    });
-
-    // SSEレスポンスを返す
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        "X-Connection-ID": connectionId
-      }
-    });
-  }
-  
-  // メッセージ処理のエンドポイント
-  if (path === "/message" && req.method === "POST") {
-    // コネクションIDをヘッダーから取得
-    const connectionId = req.headers.get("X-Connection-ID");
-    if (!connectionId || !connections.has(connectionId)) {
-      return new Response("Connection not found", { status: 404 });
-    }
-    
-    try {
-      // メッセージを処理
-      const body = await req.text();
-      const message = JSON.parse(body);
+    // SSE接続のエンドポイント
+    if (path === "/sse" && req.method === "GET") {
+      // クエリパラメータからコネクションIDを取得（初回接続時はnull）
+      let connectionId = url.searchParams.get("id");
       
-      // メッセージをクライアントに送信
-      sendMessage(connectionId, JSON.stringify({
-        type: "response",
-        data: message,
+      // コネクションIDがない場合は新規作成
+      if (!connectionId) {
+        connectionId = crypto.randomUUID();
+      }
+      
+      // 初期メッセージを追加
+      if (!MESSAGES[connectionId]) {
+        addMessage(connectionId, JSON.stringify({
+          type: "connection",
+          connectionId,
+          message: "Connected to SSE server",
+          timestamp: new Date().toISOString()
+        }));
+      }
+      
+      // 定期的なpingメッセージを追加
+      addMessage(connectionId, JSON.stringify({
+        type: "ping",
         timestamp: new Date().toISOString()
       }));
       
-      return new Response("OK", { status: 200 });
-    } catch (error) {
-      console.error("Error handling message:", error);
-      return new Response("Internal Server Error", { status: 500 });
+      // ReadableStreamを作成
+      const stream = new ReadableStream({
+        start(controller) {
+          // 初期メッセージを送信
+          controller.enqueue(`data: ${JSON.stringify({
+            type: "connection",
+            connectionId,
+            message: "Connected to SSE server",
+            timestamp: new Date().toISOString()
+          })}\n\n`);
+          
+          // 既存のメッセージを送信
+          const messages = getMessages(connectionId);
+          for (const message of messages) {
+            controller.enqueue(`data: ${message}\n\n`);
+          }
+          
+          // メッセージキューをクリア
+          clearMessages(connectionId);
+        }
+      });
+
+      // SSEレスポンスを返す
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          "Connection": "keep-alive",
+          "X-Connection-ID": connectionId
+        }
+      });
     }
+    
+    // メッセージ処理のエンドポイント
+    if (path === "/message" && req.method === "POST") {
+      // コネクションIDをヘッダーから取得
+      const connectionId = req.headers.get("X-Connection-ID");
+      if (!connectionId) {
+        return new Response("Connection ID required", { status: 400 });
+      }
+      
+      try {
+        // メッセージを処理
+        const body = await req.text();
+        const message = JSON.parse(body);
+        
+        // メッセージをキューに追加
+        addMessage(connectionId, JSON.stringify({
+          type: "response",
+          data: message,
+          timestamp: new Date().toISOString()
+        }));
+        
+        return new Response("OK", { status: 200 });
+      } catch (error) {
+        console.error("Error handling message:", error);
+        return new Response("Internal Server Error", { status: 500 });
+      }
+    }
+    
+    // ルートパスの場合はHTMLを返す
+    if (path === "/" && req.method === "GET") {
+      return new Response("SSE MCP Server is running. Access /sse to connect.", {
+        headers: {
+          "Content-Type": "text/plain"
+        }
+      });
+    }
+    
+    // その他のリクエストは404を返す
+    return new Response("Not Found", { status: 404 });
+  } catch (error) {
+    console.error("Unhandled error:", error);
+    return new Response("Internal Server Error: " + (error instanceof Error ? error.message : String(error)), { 
+      status: 500 
+    });
   }
-  
-  // その他のリクエストは404を返す
-  return new Response("Not Found", { status: 404 });
 };

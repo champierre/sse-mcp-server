@@ -183,7 +183,9 @@
         eventSource.close();
       }
       
-      eventSource = new EventSource('/sse');
+      // 既存のコネクションIDがあれば再利用
+      const url = connectionId ? `/sse?id=${connectionId}` : '/sse';
+      eventSource = new EventSource(url);
       
       eventSource.onopen = () => {
         addMessage('ping', '接続が確立されました');
@@ -207,14 +209,8 @@
           
           updateConnectionStatus(true);
         } catch (error) {
-          // 最初の接続メッセージはJSONではない可能性がある
-          if (event.data.startsWith('Connected with ID')) {
-            connectionId = event.data.split(' ').pop();
-            addMessage('ping', event.data);
-            updateConnectionStatus(true);
-          } else {
-            addMessage('ping', event.data);
-          }
+          addMessage('error', `メッセージの解析エラー: ${error.message}`);
+          addMessage('ping', event.data);
         }
       };
       
