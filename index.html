@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SSE MCP Server Demo</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    h1 {
+      color: #333;
+      border-bottom: 2px solid #eee;
+      padding-bottom: 10px;
+    }
+    #messages {
+      background-color: #f9f9f9;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 15px;
+      height: 300px;
+      overflow-y: auto;
+      margin-bottom: 20px;
+    }
+    .message {
+      margin-bottom: 10px;
+      padding: 8px;
+      border-radius: 4px;
+    }
+    .message.ping {
+      background-color: #e8f5e9;
+      border-left: 3px solid #4caf50;
+    }
+    .message.response {
+      background-color: #e3f2fd;
+      border-left: 3px solid #2196f3;
+    }
+    .message.error {
+      background-color: #ffebee;
+      border-left: 3px solid #f44336;
+    }
+    .message .timestamp {
+      font-size: 0.8em;
+      color: #666;
+      margin-bottom: 5px;
+    }
+    .message .content {
+      word-break: break-all;
+    }
+    .controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    input, button {
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    input {
+      flex-grow: 1;
+    }
+    button {
+      background-color: #4caf50;
+      color: white;
+      border: none;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+    button:hover {
+      background-color: #388e3c;
+    }
+    button:disabled {
+      background-color: #9e9e9e;
+      cursor: not-allowed;
+    }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    .status-indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background-color: #f44336;
+    }
+    .status-indicator.connected {
+      background-color: #4caf50;
+    }
+    .status-text {
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>SSE MCP Server Demo</h1>
+  
+  <div class="status">
+    <div id="status-indicator" class="status-indicator"></div>
+    <div id="status-text" class="status-text">切断</div>
+  </div>
+  
+  <div class="controls">
+    <button id="connect-btn">接続</button>
+    <button id="disconnect-btn" disabled>切断</button>
+  </div>
+  
+  <div class="controls">
+    <input type="text" id="message-input" placeholder="メッセージを入力..." disabled>
+    <button id="send-btn" disabled>送信</button>
+  </div>
+  
+  <div id="messages"></div>
+  
+  <script>
+    // DOM要素
+    const statusIndicator = document.getElementById('status-indicator');
+    const statusText = document.getElementById('status-text');
+    const connectBtn = document.getElementById('connect-btn');
+    const disconnectBtn = document.getElementById('disconnect-btn');
+    const messageInput = document.getElementById('message-input');
+    const sendBtn = document.getElementById('send-btn');
+    const messagesContainer = document.getElementById('messages');
+    
+    // 変数
+    let eventSource = null;
+    let connectionId = null;
+    
+    // メッセージを表示する関数
+    function addMessage(type, content) {
+      const messageDiv = document.createElement('div');
+      messageDiv.className = `message ${type}`;
+      
+      const timestamp = document.createElement('div');
+      timestamp.className = 'timestamp';
+      timestamp.textContent = new Date().toLocaleString();
+      
+      const contentDiv = document.createElement('div');
+      contentDiv.className = 'content';
+      
+      if (typeof content === 'object') {
+        contentDiv.textContent = JSON.stringify(content, null, 2);
+      } else {
+        contentDiv.textContent = content;
+      }
+      
+      messageDiv.appendChild(timestamp);
+      messageDiv.appendChild(contentDiv);
+      
+      messagesContainer.appendChild(messageDiv);
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+    
+    // 接続状態を更新する関数
+    function updateConnectionStatus(connected) {
+      if (connected) {
+        statusIndicator.classList.add('connected');
+        statusText.textContent = '接続中';
+        connectBtn.disabled = true;
+        disconnectBtn.disabled = false;
+        messageInput.disabled = false;
+        sendBtn.disabled = false;
+      } else {
+        statusIndicator.classList.remove('connected');
+        statusText.textContent = '切断';
+        connectBtn.disabled = false;
+        disconnectBtn.disabled = true;
+        messageInput.disabled = true;
+        sendBtn.disabled = true;
+        connectionId = null;
+      }
+    }
+    
+    // SSE接続を開始する関数
+    function connect() {
+      if (eventSource) {
+        eventSource.close();
+      }
+      
+      eventSource = new EventSource('/sse');
+      
+      eventSource.onopen = () => {
+        addMessage('ping', '接続が確立されました');
+      };
+      
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          // 接続IDを保存
+          if (data.type === 'connection') {
+            connectionId = data.connectionId;
+            addMessage('ping', `接続ID: ${connectionId}`);
+          } else if (data.type === 'ping') {
+            addMessage('ping', data);
+          } else if (data.type === 'response') {
+            addMessage('response', data);
+          } else {
+            addMessage('ping', data);
+          }
+          
+          updateConnectionStatus(true);
+        } catch (error) {
+          // 最初の接続メッセージはJSONではない可能性がある
+          if (event.data.startsWith('Connected with ID')) {
+            connectionId = event.data.split(' ').pop();
+            addMessage('ping', event.data);
+            updateConnectionStatus(true);
+          } else {
+            addMessage('ping', event.data);
+          }
+        }
+      };
+      
+      eventSource.onerror = (error) => {
+        addMessage('error', 'エラーが発生しました');
+        eventSource.close();
+        updateConnectionStatus(false);
+      };
+    }
+    
+    // SSE接続を終了する関数
+    function disconnect() {
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+        addMessage('ping', '接続が終了しました');
+        updateConnectionStatus(false);
+      }
+    }
+    
+    // メッセージを送信する関数
+    async function sendMessage() {
+      const message = messageInput.value.trim();
+      if (!message || !connectionId) return;
+      
+      try {
+        const response = await fetch('/message', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Connection-ID': connectionId
+          },
+          body: JSON.stringify({ text: message })
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        messageInput.value = '';
+      } catch (error) {
+        addMessage('error', `送信エラー: ${error.message}`);
+      }
+    }
+    
+    // イベントリスナー
+    connectBtn.addEventListener('click', connect);
+    disconnectBtn.addEventListener('click', disconnect);
+    sendBtn.addEventListener('click', sendMessage);
+    
+    messageInput.addEventListener('keypress', (event) => {
+      if (event.key === 'Enter') {
+        sendMessage();
+      }
+    });
+    
+    // 初期状態
+    updateConnectionStatus(false);
+  </script>
+</body>
+</html>
